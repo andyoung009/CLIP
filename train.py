@@ -7,6 +7,7 @@
 import torch 
 import torch.nn as nn
 import torchvision
+import random
 # from pandas.util._exceptions import find_stack_level
 import pandas as pd
 import numpy as np
@@ -16,6 +17,13 @@ from torch.utils.data import DataLoader
 from custom_6dpose_dataset import IN2POSEDATASET
 # Device configuration
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+
+def seed_worker(worker_id):
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
+g = torch.Generator()
+g.manual_seed(0)
 # device = 'cpu'
 
 # def custom_collate_fn(batch):
@@ -39,8 +47,10 @@ learning_rate = 0.001
 # val_dataset = data[data['split'] == 'val']
 
 data = IN2POSEDATASET()
-train_dataset, val_dataset = torch.utils.data.random_split(data, [48, 13])
+# train_dataset, val_dataset = torch.utils.data.random_split(data, [48, 13])
 # train_dataset, val_dataset = torch.utils.data.random_split(data, [1, 60])
+train_dataset, val_dataset = torch.utils.data.random_split(data, [37, 9])
+
 
 # MNIST dataset
 # train_dataset = torchvision.datasets.MNIST(root='../../data/',
@@ -55,11 +65,15 @@ train_dataset, val_dataset = torch.utils.data.random_split(data, [48, 13])
 # Data loader
 train_loader = torch.utils.data.DataLoader(dataset=train_dataset,
                                            batch_size=batch_size, 
-                                           shuffle=False)
+                                           worker_init_fn=seed_worker,
+                                           generator=g,
+                                           shuffle=True)
                                         #    collate_fn=custom_collate_fn)
 
 test_loader = torch.utils.data.DataLoader(dataset=val_dataset,
                                           batch_size=batch_size, 
+                                          worker_init_fn=seed_worker,
+                                        generator=g,
                                           shuffle=False)
                                         #   collate_fn=custom_collate_fn)
 
@@ -69,7 +83,7 @@ model = RGBD2pose(device=device, lr=1e-3, hidden_dim=520)
 update_params = []
 for param in model.e2pose.parameters():
     update_params.append(param)
-update_params += list(model.dep_fea_extra.depth_feature_extract.fc.parameters())
+# update_params += list(model.dep_fea_extra.depth_feature_extract.fc.parameters())
 # update_params = [model.e2pose, model.dep_fea_extra.depth_feature_extract.fc]
 
 criterion = nn.CrossEntropyLoss()
@@ -83,35 +97,39 @@ total_step = len(train_loader)
 for epoch in range(num_epochs):
     for i, data_detailed in enumerate(train_loader):
         # (instructions, images_rgb, images_depth, outputs)
-        instructions, images_rgb, images_depth, outputs = data_detailed
+        instructions, images_rgb, images_depth, mask, outputs = data_detailed
         instructions = list(instructions)
         images_rgb = images_rgb.to(device)
         images_depth = images_depth.to(device)
         labels = outputs.to(device)
+        mask = mask.to(device)
         # labels = torch.tensor(labels).long()
         
         # Forward pass
-        outputs = model(images_rgb, images_depth, instructions, device=device)
-        loss = criterion_1(outputs, labels)
+        outputs = model(images_rgb, images_depth, instructions, mask, device=device)
+        # loss = criterion_1(outputs, labels)
+        loss_loc = criterion_1(outputs[:3], labels[:3])
+        loss_pos = criterion_1(outputs[-4:], labels[-4:])
+        loss = 0.5 * loss_loc + 0.5 * loss_pos
         
         # Backward and optimize
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         
-        if (i+1) % 6 == 0:
-            with open('./loss_log.txt', 'a') as f:
-                f.write('Epoch [{}/{}], Step [{}/{}], Loss: {:.4f}\n' 
-                    .format(epoch+1, num_epochs, i+1, total_step, loss.item()))
-            print ('Epoch [{}/{}], Step [{}/{}], Loss: {:.4f}' 
-                   .format(epoch+1, num_epochs, i+1, total_step, loss.item()))
+        if True or (i+1) % 6 == 0:
+            with open('./loss_log_mask.txt', 'a') as f:
+                f.write('Epoch [{}/{}], Step [{}/{}], Loss: {:.4f}, Loss_loc: {:.4f}, Loss_pos: {:.4f}\n' 
+                    .format(epoch+1, num_epochs, i+1, total_step, loss.item(), loss_loc.item(), loss_pos.item()))
+            print ('Epoch [{}/{}], Step [{}/{}], Loss: {:.4f}, Loss_loc: {:.4f}, Loss_pos: {:.4f}\n' 
+                   .format(epoch+1, num_epochs, i+1, total_step, loss.item(), loss_loc.item(), loss_pos.item()))
 
-        with open('./loss_log.txt', 'a') as f:
-            f.write('Epoch [{}/{}], Step [{}/{}], Loss: {:.4f}\n' 
-                   .format(epoch+1, num_epochs, i+1, total_step, loss.item()))
+        # with open('./loss_log_mask.txt', 'a') as f:
+        #     f.write('Epoch [{}/{}], Step [{}/{}], Loss: {:.4f}, Loss_loc: {:.4f}, Loss_pos: {:.4f}\n' 
+        #            .format(epoch+1, num_epochs, i+1, total_step, loss.item(), loss_loc.item(), loss_pos.item()))
 
-        print ('Epoch [{}/{}], Step [{}/{}], Loss: {:.4f}' 
-                   .format(epoch+1, num_epochs, i+1, total_step, loss.item()))
+        # print ('Epoch [{}/{}], Step [{}/{}], Loss: {:.4f}, Loss_loc: {:.4f}, Loss_pos: {:.4f}\n' 
+        #            .format(epoch+1, num_epochs, i+1, total_step, loss.item(), loss_loc.item(), loss_pos.item()))
     # Test the model
     if epoch % 10 == 0:
         model.eval()  # eval mode (batchnorm uses moving mean/variance instead of mini-batch mean/variance)
@@ -119,20 +137,29 @@ for epoch in range(num_epochs):
             correct = 0
             total = 0
             error = 0
-            for instructions, images_rgb, images_depth, outputs in test_loader:
+            for instructions, images_rgb, images_depth, mask, outputs in test_loader:
                 images_rgb = images_rgb.to(device)
                 images_depth = images_depth.to(device)
                 labels = outputs.to(device)
+                mask = mask.to(device)
                 
-                outputs = model(images_rgb, images_depth, instructions, device=device)
-                loss = criterion_1(outputs, labels)
+                outputs = model(images_rgb, images_depth, instructions, mask, device=device)
+                # loss = criterion_1(outputs, labels)
+                loss_loc = criterion_1(outputs[:3], labels[:3])
+                loss_pos = criterion_1(outputs[-4:], labels[-4:])
+                loss = 0.5 * loss_loc + 0.5 * loss_pos
                 
                 total += labels.size(0)
                 error += loss
-            with open('./loss_log.txt', 'a') as f:
-                f.write('The average error of the model on the 13 test images  is: {} '.format(error / total))
 
-            print('The average error of the model on the 13 test images  is: {} '.format(error / total))
+            with open('./loss_log_Maskrcnn.txt', 'a') as f:
+                f.write('The average error of the model on the 9 test images  is: {} '.format(error / total))
+
+            with open('./loss_log_Maskrcnn.txt', 'a') as f:
+                f.write('Epoch [{}/{}], Step [{}/{}], Loss: {:.4f}, loss_loc: {:.4f}, loss_pos: {:.4f}\n' 
+                    .format(epoch+1, num_epochs, i+1, total_step, loss.item(), loss_loc.item(), loss_pos.item()))
+
+            print('The average error of the model on the 9 test images  is: {}.'.format(error / total))
 f.close()
 
 # Save the model checkpoint

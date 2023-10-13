@@ -17,7 +17,9 @@ device = 'cpu'
 
 class IN2POSEDATASET(Dataset):
     # def __init__(self, root='/data/ML_document/datasets/custom_6dpose_dataset', ann_file='custom_6dpose_dataset.csv', transform=transforms.ToTensor(), target_transform=None):
-    def __init__(self, root='/data/ML_document/datasets/custom_6dpose_dataset', ann_file='custom_6dpose_dataset.csv', transform=None, target_transform=None):
+    # def __init__(self, root='/data/ML_document/datasets/custom_6dpose_dataset', ann_file='custom_6dpose_dataset.csv', transform=None, target_transform=None):
+    def __init__(self, root='/data/ML_document/datasets/custom_6dpose_dataset', ann_file='custom_6dpose_dataset_mask.csv', transform=transforms.ToTensor(), target_transform=None):        
+
         super(IN2POSEDATASET, self).__init__()
 
         self.data_path = root
@@ -75,13 +77,15 @@ class IN2POSEDATASET(Dataset):
         # if self.transform is not None:
         #     images_depth = self.transform(images_depth)
 
+        mask = np.load(self.data_path + '/' + self.database.iloc[index, 6])
+
         # outpus  shape = (b,3+4=7)
         info_dict = eval(self.database.iloc[index, 3])
         outputs = torch.cat((torch.tensor(info_dict["translation"]),torch.tensor(info_dict["rotation"])),dim = -1)
         if self.target_transform is not None:
             outputs = self.target_transform(outputs)
 
-        return (instructions, images_rgb, images_depth, outputs)
+        return (instructions, images_rgb, images_depth, mask, outputs)
 
 
 if __name__ == '__main__':
@@ -89,9 +93,9 @@ if __name__ == '__main__':
     dataset = DataLoader(dataset=datasets6d2pose,batch_size=6,shuffle=True,num_workers=2)
     # dataiter = iter(dataset)
     # data = next(dataiter.__next__())
-    for i ,(a,b,c,d) in enumerate(dataset):
+    for i ,(a,b,c,d,e) in enumerate(dataset):
     # a,b,c,d = data
         print(a,b.shape,c.shape,d.shape)
     print(datasets6d2pose.__len__())
-    a, b, c, d = datasets6d2pose.__getitem__(index=1)
+    a, b, c, d, e  = datasets6d2pose.__getitem__(index=1)
     print('test!')

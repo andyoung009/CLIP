@@ -38,9 +38,10 @@ class Depth_Feature_extract(nn.Module):
     def __init__(self, device='cuda', lr=1e-3, output_dim=1024):
         super().__init__()
         self.depth_feature_extract = models.resnet50(pretrained=True).to(device)
-        self.depth_feature_extract.fc = nn.Linear(2048,output_dim)
-        nn.init.xavier_uniform_(self.depth_feature_extract.fc.weight)
-        nn.init.zeros_(self.depth_feature_extract.fc.bias)
+        self.depth_feature_extract.fc = nn.Identity()
+        # self.depth_feature_extract.fc = nn.Linear(2048,output_dim)
+        # nn.init.xavier_uniform_(self.depth_feature_extract.fc.weight)
+        # nn.init.zeros_(self.depth_feature_extract.fc.bias)
 
     def forward(self, x):
         return self.depth_feature_extract(x)
@@ -83,7 +84,7 @@ class RGBD2pose(nn.Module):
 
         # 生成6d pose的网络架构（5层全连接网络）
         # self.e2pose = Embedding2pose(input_dim=4160,hidden_dim=hidden_dim,output_dim=7,num_layers=2)
-        self.e2pose = Embedding2pose(input_dim=1024*3,hidden_dim=hidden_dim,output_dim=7,num_layers=2).to(device=device)
+        self.e2pose = Embedding2pose(input_dim=1024*4,hidden_dim=hidden_dim,output_dim=7,num_layers=2).to(device=device)
         self.dep_fea_extra = Depth_Feature_extract(device=device,lr=1e-3, output_dim=1024).to(device=device)
         # self.e2pose.apply(initialize_weights)
 
@@ -94,7 +95,7 @@ class RGBD2pose(nn.Module):
     #     return processed
 
 
-    def forward(self, img_rgb, img_depth, instructions, device):
+    def forward(self, img_rgb, img_depth, instructions, mask, device):
         text = clip.tokenize(instructions).to(device)
         image_rgb =img_rgb.to(device)
         # logits_per_image, logits_per_text = self.backbone(image_rgb, text)
@@ -117,10 +118,13 @@ class RGBD2pose(nn.Module):
 
 
         # 图片深度信息复制为3通道同时将深度值变为原来的1/3
-        img_depth = img_depth.unsqueeze(1).repeat(1,3,1,1) / 3.0 / 255.0
+        # img_depth = img_depth.unsqueeze(1).repeat(1,3,1,1) / 3.0 / 255.0
+        mask = mask.float()
+        depth_and_mask = (img_depth / 255.0 + mask) / 2
+        total_depth_and_mask = torch.stack((mask, img_depth, depth_and_mask), dim=1)
         # 特征提取拼接
         # img_depth_out = self.backbone(img_depth, instructions=instructions)
-        img_depth_out = self.dep_fea_extra(img_depth)
+        img_depth_out = self.dep_fea_extra(total_depth_and_mask)
 
         total_embed = torch.cat((text_features, image_rgb_features, img_depth_out),dim=-1)
         # img_depth_embed = torch.cat((img_depth_out["pred_logits"], img_depth_out["pred_boxes"]),dim=-1)
